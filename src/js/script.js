@@ -4,6 +4,7 @@ var $ = require('jquery'),
     electron = require('electron'),
     format = require('string-format'),
     key = require('./js/key.json'),
+    os = require('os'),
     wolfram = require('wolfram-alpha').createClient(key.api, {
         width: 348,
         maxwidth: 380
@@ -18,6 +19,28 @@ var $ = require('jquery'),
     unicode = /(?:\\:)(([a-z]|[0-9])+)/g,
     imagesLoaded = require('imagesloaded'),
     WebFrame = require('web-frame');
+
+window.suggestions = getSuggestions();
+
+function getSuggestions() {
+    var suggestions = [];
+    var defaultSuggestions = require('./js/suggestions.json');
+    suggestions = suggestions.concat(defaultSuggestions);
+    try {
+        if (window.options.enableDefaultSuggestions === false) {
+            suggestions.length = 0;
+        }
+        if (window.options.customSuggestions) {
+            suggestions = suggestions.concat(rc.customSuggestions);
+        }
+    } catch(err) {
+        Bugsnag.notifyException(err);
+    }
+    if (!suggestions.length) {
+        suggestions.push('');
+    }
+    return suggestions;
+}
 
 var clipboardCopy = {
     link: function() {
@@ -45,17 +68,22 @@ var shareButton = {
     }
 }
 
+function defaults(test, fallback) {
+    return typeof test !== 'undefined' ? test : fallback;
+}
+
 // options
 var preferences = {
     save: function() {
         var submenu = menuthing.items[menuthing.items.length - 1].submenu.items;
         var themeMenu = menuthing.items[menuthing.items.length - 2].submenu.items;
-
+        
         window.options = {
-            mathjs: submenu[0].checked,
-            startup: submenu[1].checked,
-            center: submenu[2].checked,
-            bugreport: submenu[3].checked,
+            mathjs: defaults(submenu[0].checked, true),
+            startup: defaults(submenu[1].checked, true),
+            center: defaults(submenu[2].checked, false),
+            bugreport: defaults(submenu[3].checked, true),
+            autoupdate: defaults(submenu[4].checked, true),
             theme: {
                 "red": themeMenu[0].checked,
                 "orange": themeMenu[1].checked,
@@ -65,10 +93,12 @@ var preferences = {
                 "purple": themeMenu[6].checked,
                 "pink": themeMenu[5].checked,
                 "contrast": themeMenu[7].checked
-            }
+            },
+            enableDefaultSuggestions: defaults(submenu[5].checked, true),
+            customSuggestions: defaults(window.options.customSuggestions, [])
         };
 
-        ipcRenderer.send("save_options", JSON.stringify(window.options));
+        ipcRenderer.send("save_options", JSON.stringify(window.options, null, "  "));
 
         preferences.theme();
     },
@@ -199,19 +229,13 @@ $(document).keydown(function(event) {
 });
 
 $(document).ready(function() {
-    // set placeholder
-    $.getJSON('js/suggestions.json', function(json) {
-        var placeholder = rand.paul(json);
+    function newPlaceholder() {
+        // set placeholder
+        var placeholder = rand.paul(window.suggestions);
         $('#input').attr('placeholder', placeholder);
-    });
+    }
 
-    window.setInterval(function() {
-        // new placeholder every 10 seconds
-        $.getJSON('js/suggestions.json', function(json) {
-            var placeholder = rand.paul(json);
-            $('#input').attr('placeholder', placeholder);
-        });
-    }, 10000);
+    setInterval(newPlaceholder, 10000);
 
     // search button
     $("#input").keyup(function() {
@@ -225,6 +249,19 @@ $(document).ready(function() {
     // on window open select the input for conveinence
     ipcRenderer.on("window-open", function() {
         $("#input").focus().select();
+    });
+
+    ipcRenderer.on("log", function(m) {
+        _consolelog(m)
+    }) 
+
+    ipcRenderer.on("error", function(e) {
+        _consolelog("Error from backend:" + e)
+    })
+
+    ipcRenderer.on("did-save-options", function(e) {
+        window.suggestions = getSuggestions();
+        newPlaceholder();
     });
 
     // on right click

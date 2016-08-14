@@ -1,21 +1,80 @@
-var electron = require('electron');
-var app = require('electron').app;
+const bugsnag = require('bugsnag');
+const electron = require('electron');
+const app = require('electron').app;
+const path = require('path');
+const pjson = require('./package.json');
+
+bugsnag.register('b3d3a88f13b0f8e22b4485b8b04939bd', {
+    releaseStage: process.env.NODE_ENV,
+    appVersion: pjson.version,
+    sendCode: true,
+    projectRoot: path.resolve(app.getPath('exe'), '../..'), // Locates `Content` directory within the .app
+    metaData: {
+        process: {
+            arch: process.arch,
+            argv: process.argv,
+            pid: process.pid,
+            platform: process.platform,
+            version: process.version,
+            cwd: process.cwd(),
+            features: process.features,
+            uptime: process.uptime(),
+            versions: process.versions,
+        }
+    }
+});
+
+bugsnag.onBeforeNotify(function () {
+    // Notifies us of initial startup runtime errors & normal errors when user has specified allowing bugreports
+    return !global.options || global.options.bugreport === true;
+});
+
+process.on('unhandledRejection', function (err) {
+    console.error('Unhandled error: ' + (err && err.stack || err));
+    bugsnag.notify(err);
+});
+
 var ipc = require('electron').ipcMain;
 var globalShortcut = require('electron').globalShortcut;
 var autoUpdater = require('electron').autoUpdater;
 var menubar = require('menubar');
 var fs = require('fs');
 var AutoLaunch = require('auto-launch');
-var pjson = require('./package.json');
-const path = require('path')
-require('shelljs/global')
+var os = require('os')
+const isDev = require('electron-is-dev');
+
+try {
+    global.options = require(os.homedir() + '/.nimble-options.json');
+} catch (e) {
+    global.options = {
+        "mathjs": true,
+        "startup": true,
+        "center": false,
+        "bugreport": true,
+        "autoupdate": true,
+        theme: {
+            "red": false,
+            "orange": true,
+            "yellow": false,
+            "green": false,
+            "blue": false,
+            "purple": false,
+            "pink": false,
+            "contrast": false
+        },
+        enableDefaultSuggestions: true,
+        customSuggestions: []
+    }
+}
+
+require('shelljs/global');
 
 var mb = menubar({
     height: 42,
     width: 380,
     icon: __dirname + '/assets/img/menubar_iconTemplate.png',
     index: 'file://' + __dirname + '/src/index.html',
-    "preload-window": true
+    preloadWindow: true
 });
 
 ipc.on('resize', function(event, arg) {
@@ -100,11 +159,11 @@ ipc.on('node_console', function(event, arg) {
 });
 
 ipc.on('save_options', function(event, arg) {
-    fs.writeFile(__dirname + "/options.json", arg, function(err) {
+    fs.writeFile(os.homedir() + '/.nimble-options.json', arg, function(err) {
         if(err) {
             console.log(err);
         }
-
+        mb.window.webContents.send('did-save-options', !err);
         console.log("Options were saved.\n");
     });
 
@@ -126,10 +185,8 @@ var optfunc = {
 
         // startup?
         if (global.options.startup === true) {
-            console.log("Loading Nimble on startup: on.\n")
             nimbleAutoLauncher.enable();
         } else {
-            console.log("Loading Nimble on startup: off.\n")
             nimbleAutoLauncher.disable();
         }
 
@@ -166,6 +223,17 @@ ipc.on('quit', function(){
 })
 
 mb.on('after-create-window', function() {
+    // error/log forwarding
+    process.on("uncaughtException", function(err) {
+        mb.window.webContents.send("error", err);
+    })
+
+    var _consolelog = console.log.bind(console);
+    console.log = function log(message) {
+        mb.window.webContents.send('log', message);
+        _consolelog(message);
+    };
+
     mb.window.setResizable(false);
     mb.tray.setPressedImage(__dirname + '/assets/img/menubar_icon_pressed.png');
 
@@ -180,7 +248,10 @@ mb.on('after-create-window', function() {
     output.stdout.on("data", function(data) {
         if (data == 1) {
             global.autohide = true
+            console.log("menubar is set to autohide")
         } else if (data == 0) {
+            global.autohide = false
+        } else {
             global.autohide = false
         }
 
@@ -190,7 +261,19 @@ mb.on('after-create-window', function() {
             width: 380,
             height: 42
         });
-    })  
+    })
+
+    output.stderr.on("data", function(data) {
+        console.log("no autohide setting was found, setting to default")
+        global.autohide = false
+
+        mb.window.setBounds({
+            x: mb.window.getPosition()[0],
+            y: optfunc.getYValue(),
+            width: 380,
+            height: 42
+        });
+    })
 
     function click(e, bounds) {
         if (e.shiftKey) {
@@ -233,36 +316,37 @@ mb.on('ready', function() {
     global.screenSize = screen.getPrimaryDisplay().size;
 
     // auto update
-    var updateFeed = 'https://nimble-autoupdate.herokuapp.com/update/osx/';
-    autoUpdater.setFeedURL(updateFeed + pjson.version);
+    if (global.options.autoupdate === true && isDev === false) {
+        var updateFeed = 'https://nimble-autoupdate.herokuapp.com/update/osx/';
+        autoUpdater.setFeedURL(updateFeed + pjson.version);
+        autoUpdater.checkForUpdates();
 
-    autoUpdater.checkForUpdates();
-
-    autoUpdater.on('update-available', function() {
-        console.log('update available and downloading');
-        require('electron').dialog.showMessageBox({
-            "message": "Update Downloading",
-            "detail": "A new update is currently available and downloading. Nimble will let you know before it quits to install the update.",
-            "buttons": []
-        })
-    });
-
-    autoUpdater.on('update-downloaded', function(event) {
-        console.log('update downloaded: ' + event);
-        require('electron').dialog.showMessageBox({
-            "message": "Update Ready To Install",
-            "detail": "Nimble has downloaded a new update. Would you like to quit Nimble and install it?",
-            "buttons": ["No", "Yes"],
-        }, function(response) {
-            switch(response) {
-                case 0:
-                    break;
-                case 1:
-                    autoUpdater.quitAndInstall();
-                    break;
-            }
+        autoUpdater.on('update-available', function() {
+            console.log('update available and downloading');
+            require('electron').dialog.showMessageBox({
+                "message": "Update Downloading",
+                "detail": "A new update is currently available and downloading. Nimble will let you know before it quits to install the update.",
+                "buttons": []
+            })
         });
-    });
+
+        autoUpdater.on('update-downloaded', function(event) {
+            console.log('update downloaded: ' + event);
+            require('electron').dialog.showMessageBox({
+                "message": "Update Ready To Install",
+                "detail": "Nimble has downloaded a new update. Would you like to quit Nimble and install it?",
+                "buttons": ["Yes", "No"],
+            }, function(response) {
+                switch(response) {
+                    case 1:
+                        break;
+                    case 0:
+                        autoUpdater.quitAndInstall();
+                        break;
+                }
+            });
+        });
+    }
 });
 
 mb.on('will-quit', function() {

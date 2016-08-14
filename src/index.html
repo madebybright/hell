@@ -27,7 +27,7 @@
             }
         };
         Bugsnag.beforeNotify = function beforeNotify(payload) {
-            return window.options.bugreport;
+            return typeof window.options !== 'undefined' ? window.options.bugreport : false;
         };
     </script>
     <script src="js/script.js"></script>
@@ -58,28 +58,15 @@
     </script> 
     <script>
     try {
-        window.options = require("../options.json") || {
-            "mathjs": true,
-            "startup": true,
-            "center": false,
-            "bugreport": true,
-            theme: {
-                "red": false,
-                "orange": true,
-                "yellow": false,
-                "green": false,
-                "blue": false,
-                "purple": false,
-                "pink": false,
-                "contrast": false
-            }
-        };
+        window.options = require(os.homedir() + '/.nimble-options.json');
+        console.log(require(os.homedir() + '/.nimble-options.json'))
     } catch (e) {
         window.options = {
             "mathjs": true,
             "startup": true,
             "center": false,
             "bugreport": true,
+            "autoupdate": true,
             theme: {
                 "red": false,
                 "orange": true,
@@ -89,10 +76,12 @@
                 "purple": false,
                 "pink": false,
                 "contrast": false
-            }
+            },
+            "enableDefaultSuggestions": true,
+            "customSuggestions": []
         };
     } finally {
-        ipcRenderer.send("save_options", JSON.stringify(window.options));
+        ipcRenderer.send("save_options", JSON.stringify(window.options, null, "  "));
     }
 
     const remote = require('electron').remote;
@@ -134,12 +123,12 @@
         submenu: [{
                 label: 'Learn More',
                 click: function() {
-                    require('electron').shell.openExternal('http://madebybright.com')
+                    require('electron').shell.openExternal('http://maybulb.com')
                 }
             }, {
                 label: 'Contact Support',
                 click: function() {
-                    require('electron').shell.openExternal('mailto:info@madebybright.com')
+                    require('electron').shell.openExternal('mailto:team@maybulb.com')
                 }
             }
         ]
@@ -242,9 +231,23 @@
                 preferences.save();
             }
         }, {
-            label: "Report bugs to Bright HQ",
+            label: "Report bugs to Maybulb HQ",
             type: "checkbox",
             checked: window.options.bugreport,
+            click: function() {
+                preferences.save();
+            }
+        }, {
+            label: "Autoupdate Nimble if there is a new version",
+            type: "checkbox",
+            checked: window.options.autoupdate,
+            click: function() {
+                preferences.save();
+            }
+        }, {
+            label: "Use default suggestions",
+            type: "checkbox",
+            checked: window.options.enableDefaultSuggestions,
             click: function() {
                 preferences.save();
             }
